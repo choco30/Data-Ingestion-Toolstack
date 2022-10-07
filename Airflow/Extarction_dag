@@ -1,0 +1,146 @@
+from datetime import timedelta,datetime,date
+from airflow import models
+from airflow import DAG
+from airflow.contrib.operators import gcs_to_bq
+from airflow.operators.python_operator import PythonOperator 
+from airflow.models import Variable
+from airflow.contrib.operators.bigquery_operator import BigQueryOperator
+from google.cloud import bigquery
+from airflow.providers.apache.beam.operators.beam import BeamRunPythonPipelineOperator
+from airflow.operators.dagrun_operator import TriggerDagRunOperator
+from airflow.operators.bash_operator import BashOperator
+from airflow.contrib.operators.dataflow_operator import DataFlowPythonOperator
+from airflow.utils.trigger_rule import TriggerRule
+from audit_class import audit_class_bq_ds_auditcntrl
+
+
+common_config=Variable.get("common_config", deserialize_json=True)
+table_list=common_config["table_list"]
+BQ_PROJECT=common_config['BQ_PROJECT']
+connection_details=common_config["connection_details"]
+BQ_landing_dataset=common_config['BQ_landing_dataset']
+source_bucket=common_config["source_bucket"]
+BQ_stg_dataset=common_config['BQ_stg_dataset']
+dataflow_bucket=common_config["dataflow_bucket"]
+
+DEFAULT_ARGS = {
+    'depends_on_past': False,
+    'start_date': datetime(2022,6,5),
+    'catchup': False,
+    'retries': 3,
+    'retry_delay': timedelta(minutes=1),
+}
+
+dag= DAG(
+	'Extraction_dag_kronos',
+	catchup=False,
+	default_args=DEFAULT_ARGS,
+	schedule_interval='30 12 * * *'
+	)
+    
+
+def date_extract(**kwargs):
+            
+    today_date=datetime.now()+timedelta(hours=5,minutes=30)
+    partition_date=str(today_date.strftime("%Y-%m-%d"))
+    job_load_datetime=str(today_date.strftime("%Y-%m-%d-%H-%M-%S"))
+    kwargs['ti'].xcom_push(key="partition_date",value=partition_date)
+    kwargs['ti'].xcom_push(key="job_load_datetime",value=job_load_datetime)
+        
+DATE_FUNCTION=PythonOperator(
+    task_id="DATE_FUNCTION",
+    python_callable=date_extract,
+    provide_context=True,
+    dag=dag
+)
+
+partition_date="{{ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION')}}"
+TriggerDag=TriggerDagRunOperator(
+    task_id="trigger_loading_dag",
+    trigger_dag_id="gcs_to_bq_kronos",
+    conf={"load_date":partition_date},
+    dag=dag)
+for table in table_list:
+    table_name="KRN_01_DBO_"+table
+    
+    def start_func(**kwargs):
+        table=str(kwargs['table'])
+        status=str(kwargs['status'])
+        ti=kwargs['ti']
+        audit_class_bq_ds_auditcntrl().audit_start("Extraction_dag_kronos","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'),'NULL')
+        
+    def success_func(**kwargs):
+        table=kwargs['table']
+        status=kwargs['status']
+        ti=kwargs['ti']
+        audit_class_bq_ds_auditcntrl().audit_end_success("Extraction_dag_kronos","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'),'NULL')
+        
+    def fail_func(**kwargs):
+        table=kwargs['table']
+        status=kwargs['status']
+        ti=kwargs['ti']
+        audit_class_bq_ds_auditcntrl().audit_end_fail("Extraction_dag_kronos","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'))        
+        
+    Audit_START_Task=PythonOperator(
+        task_id=table+"_Audit_START_Task",
+        python_callable=start_func,
+        op_kwargs={'table':table_name,'status':'STARTED'},
+        provide_context=True,
+        dag=dag)
+        
+    Audit_SUCCESS_Task=PythonOperator(
+        task_id=table+"_Audit_SUCCESS_Task",
+        python_callable=success_func,
+        op_kwargs={'table':table_name,'status':"SUCCESS"},
+        provide_context=True,
+        trigger_rule='all_success',
+        dag=dag)
+        
+    Audit_FAIL_Task=PythonOperator(
+        task_id=table+"_Audit_FAIL_Task",
+        python_callable=fail_func,
+        op_kwargs={'table':table_name,'status':"FAILED"},
+        provide_context=True,
+        trigger_rule='all_failed',
+        dag=dag)        
+    
+    def func(**kwargs):
+        instance=kwargs['ti']
+        big_query=bigquery.Client()
+        table=kwargs['table']
+        extract_query='''select * from `corp-services-krnospbi-svc-dev.bq_ds_auditcntrl.STATIC_SRC_EXTRACT_QRYSTRING` where SRC_TABLE_NAME= "{0}" '''.format(table)
+        result_set=big_query.query(extract_query)
+        for row in result_set:
+            print(row.SRC_TABLE_NAME)
+            kwargs['ti'].xcom_push(key="src_table_name", value=str(row.SRC_TABLE_NAME))
+            print(row.QUERY_STRING)
+            kwargs['ti'].xcom_push(key="sql_query", value=str(row.QUERY_STRING))
+         
+        job_name=str(table).lower().replace("_","")+"-"+instance.xcom_pull(key='job_load_datetime',task_ids='DATE_FUNCTION')
+        kwargs['ti'].xcom_push(key="jobName", value=str(job_name))
+        kwargs['ti'].xcom_push(key="targetBucket", value=str(source_bucket))
+        kwargs['ti'].xcom_push(key="dfBucket", value=str(dataflow_bucket))    
+        connection_string=connection_details
+        kwargs['ti'].xcom_push(key="connDetail", value=connection_string)
+            
+
+        
+    config_extract=PythonOperator(
+        task_id=table+"_config_extract",
+        python_callable=func,
+        op_kwargs={'table':table},
+        provide_context=True,
+        dag=dag)    
+        
+    start_dataflow_job=BashOperator(
+        task_id=table+"_start_dataflow_job",
+        bash_command='''python3 /home/airflow/gcs/dags/sql_server_to_gcs.py --runner DataflowRunner --project corp-services-krnospbi-svc-dev --region asia-south1 --temp_location gs://gcp01-sb-krnospbi-dataflow-bucket/temp --network global-mgmt-vpc-interconnect-trust --subnetwork https://www.googleapis.com/compute/v1/projects/global-landingzone/regions/asia-south1/subnetworks/it-services-kronos-db-subnet-dev --no_use_public_ips --max_num_workers 5 --job_name {5} --worker_machine_type n1-standard-4 --service_account_email krnospbi-sa-dataflow@corp-services-krnospbi-svc-dev.iam.gserviceaccount.com --setup_file /home/airflow/gcs/dags/setup.py --sqlQuery "{0}" --srcTableName "{1}" --targetBucket "{2}" --dfBucket "{3}" --connDetail "{4}" --Loaddate "{6}" '''.format("{{{{ti.xcom_pull(key='sql_query',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='src_table_name',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='targetBucket',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='dfBucket',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='connDetail',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='jobName',task_ids='{0}_config_extract')}}}}".format(table),
+        "{{ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION')}}"),
+        dag=dag)
+        
+    DATE_FUNCTION>>Audit_START_Task>>config_extract>>start_dataflow_job>>[Audit_FAIL_Task,Audit_SUCCESS_Task,TriggerDag]    
+    
+
+    
+
+    
