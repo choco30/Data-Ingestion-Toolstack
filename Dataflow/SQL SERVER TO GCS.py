@@ -23,7 +23,6 @@ class setenv(beam.DoFn):
       def process(self,context,df_Bucket):
           import jaydebeapi
           import pandas as pd
-          #src1='gs://gcp01-sb-krnospbi-dataflow-bucket/JAVA_JDK_AND_JAR'
           src1='gs://'+df_Bucket+'/JAVA_JDK_AND_JAR'
           os.system('gsutil cp '+src1+'/mssql-jdbc-10.2.1.jre8.jar /tmp/' +'&&'+ 'gsutil cp -r '+src1+'/jdk-8u202-linux-x64.tar.gz /tmp/')
           logging.info('Jar copied to Instance..')
@@ -38,12 +37,6 @@ class readandwrite(beam.DoFn):
           import jaydebeapi
           import pandas as pd
           from datetime import datetime,date,timedelta
-          #query='select * from dbo.CMSPRINCIPALEMPLOYER ;'
-          #database_user='adanicore'
-          #database_password='coreteam'
-          #database_host='10.90.93.141'
-          #database_port='1433'
-          #database_db='KronosWFC'
           today_date=(datetime.now()+timedelta(hours=5,minutes=30)).strftime("%Y-%m-%d")
           
           DatabaseConn=conn_Detail.split("~|*")
@@ -56,9 +49,7 @@ class readandwrite(beam.DoFn):
           query = sql_readQuery
           
           jclassname = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
-          #url = ("jdbc:sqlserver://"+database_host+":"+database_port+";databaseName="+database_db+";user="+database_user+";password="+database_password+";encrypt=false")
           url = ("jdbc:sqlserver://"+database_host+":"+database_port+";databaseName="+database_db+";encrypt=false")
-          #("jdbc:sqlserver://localhost:1433;\\SQLEXPRESS;databaseName=Tema6","sa","123456");
           logging.info(url)
           jars = "/tmp/mssql-jdbc-10.2.1.jre8.jar"
           libs = None
@@ -69,15 +60,12 @@ class readandwrite(beam.DoFn):
           logging.info('Query submitted to SQL Server Database..')
           sql_query = pd.read_sql(query, cnx)
           
-          #sql_query.to_gbq('Krono_df.CMSPRINCIPALEMPLOYER', 'corp-services-krnospbi-svc-dev',if_exists='append')
     
           logging.info('printing data')
           df = pd.DataFrame(sql_query,index=None)
           tgt_file_location = "gs://"+target_Bucket+"/01/DBO/source_csv/"+Load_date+"/"+src_TableName+".csv"
           df.to_csv(tgt_file_location, index=False, date_format='%Y-%m-%d %H:%M:%E*S')
-          #df2 = df.to_dict('records')
-          #logging.info(df2)
-          #return df2 
+
    
 
 def run():    
