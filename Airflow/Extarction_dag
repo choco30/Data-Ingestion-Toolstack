@@ -32,10 +32,10 @@ DEFAULT_ARGS = {
 }
 
 dag= DAG(
-	'Extraction_dag_kronos',
+	'Dag_Name',
 	catchup=False,
 	default_args=DEFAULT_ARGS,
-	schedule_interval='30 12 * * *'
+	schedule_interval='Schedule_Interval'
 	)
     
 
@@ -67,19 +67,19 @@ for table in table_list:
         table=str(kwargs['table'])
         status=str(kwargs['status'])
         ti=kwargs['ti']
-        audit_class_bq_ds_auditcntrl().audit_start("Extraction_dag_kronos","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'),'NULL')
+        audit_class_bq_ds_auditcntrl().audit_start("Dag_name","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'),'NULL')
         
     def success_func(**kwargs):
         table=kwargs['table']
         status=kwargs['status']
         ti=kwargs['ti']
-        audit_class_bq_ds_auditcntrl().audit_end_success("Extraction_dag_kronos","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'),'NULL')
+        audit_class_bq_ds_auditcntrl().audit_end_success("Dag_Name","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'),'NULL')
         
     def fail_func(**kwargs):
         table=kwargs['table']
         status=kwargs['status']
         ti=kwargs['ti']
-        audit_class_bq_ds_auditcntrl().audit_end_fail("Extraction_dag_kronos","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'))        
+        audit_class_bq_ds_auditcntrl().audit_end_fail("Dag_name","EXTRACTION",table,status,ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION'))        
         
     Audit_START_Task=PythonOperator(
         task_id=table+"_Audit_START_Task",
@@ -108,7 +108,7 @@ for table in table_list:
         instance=kwargs['ti']
         big_query=bigquery.Client()
         table=kwargs['table']
-        extract_query='''select * from `corp-services-krnospbi-svc-dev.bq_ds_auditcntrl.STATIC_SRC_EXTRACT_QRYSTRING` where SRC_TABLE_NAME= "{0}" '''.format(table)
+        extract_query='''select * from `table_id` where SRC_TABLE_NAME= "{0}" '''.format(table)
         result_set=big_query.query(extract_query)
         for row in result_set:
             print(row.SRC_TABLE_NAME)
@@ -134,7 +134,7 @@ for table in table_list:
         
     start_dataflow_job=BashOperator(
         task_id=table+"_start_dataflow_job",
-        bash_command='''python3 /home/airflow/gcs/dags/sql_server_to_gcs.py --runner DataflowRunner --project corp-services-krnospbi-svc-dev --region asia-south1 --temp_location gs://gcp01-sb-krnospbi-dataflow-bucket/temp --network global-mgmt-vpc-interconnect-trust --subnetwork https://www.googleapis.com/compute/v1/projects/global-landingzone/regions/asia-south1/subnetworks/it-services-kronos-db-subnet-dev --no_use_public_ips --max_num_workers 5 --job_name {5} --worker_machine_type n1-standard-4 --service_account_email krnospbi-sa-dataflow@corp-services-krnospbi-svc-dev.iam.gserviceaccount.com --setup_file /home/airflow/gcs/dags/setup.py --sqlQuery "{0}" --srcTableName "{1}" --targetBucket "{2}" --dfBucket "{3}" --connDetail "{4}" --Loaddate "{6}" '''.format("{{{{ti.xcom_pull(key='sql_query',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='src_table_name',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='targetBucket',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='dfBucket',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='connDetail',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='jobName',task_ids='{0}_config_extract')}}}}".format(table),
+        bash_command='''python3 /home/airflow/gcs/dags/sql_server_to_gcs.py --runner DataflowRunner --project project_name --region asia-south1 --temp_location bucket/temp --network network_name --subnetwork subnet_name --no_use_public_ips --max_num_workers 5 --job_name {5} --worker_machine_type n1-standard-4 --service_account_email service_account_name --setup_file /home/airflow/gcs/dags/setup.py --sqlQuery "{0}" --srcTableName "{1}" --targetBucket "{2}" --dfBucket "{3}" --connDetail "{4}" --Loaddate "{6}" '''.format("{{{{ti.xcom_pull(key='sql_query',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='src_table_name',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='targetBucket',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='dfBucket',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='connDetail',task_ids='{0}_config_extract')}}}}".format(table),"{{{{ti.xcom_pull(key='jobName',task_ids='{0}_config_extract')}}}}".format(table),
         "{{ti.xcom_pull(key='partition_date',task_ids='DATE_FUNCTION')}}"),
         dag=dag)
         
