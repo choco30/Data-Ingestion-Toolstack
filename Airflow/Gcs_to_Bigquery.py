@@ -28,7 +28,7 @@ DEFAULT_ARGS = {
 }
 
 dag= DAG(
-	'gcs_to_bq_kronos',
+	'Dag_Name',
 	catchup=False,
 	default_args=DEFAULT_ARGS,
 	schedule_interval=None
@@ -61,7 +61,7 @@ for table in table_list:
         load_date=kwargs["load_date"]
         status=str(kwargs['status'])
         ti=kwargs['task_instance']
-        audit_class_bq_ds_auditcntrl().audit_start("gcs_to_bq_kronos","LANDING",table,status,load_date,'NULL')
+        audit_class_bq_ds_auditcntrl().audit_start("Dag_name","LANDING",table,status,load_date,'NULL')
         
     def success_func(**kwargs):
         table=kwargs['table']
@@ -75,14 +75,14 @@ for table in table_list:
         for row in record_count_query:
             record_count=row[0]
             break
-        audit_class_bq_ds_auditcntrl().audit_end_success("gcs_to_bq_kronos","LANDING",table,status,load_date,record_count)
+        audit_class_bq_ds_auditcntrl().audit_end_success("Dag_name","LANDING",table,status,load_date,record_count)
         
     def fail_func(**kwargs):
         table=kwargs['table']
         status=kwargs['status']
         load_date=kwargs["load_date"]
         ti=kwargs['task_instance']
-        audit_class_bq_ds_auditcntrl().audit_end_fail("gcs_to_bq_kronos","LANDING",table,status,load_date)        
+        audit_class_bq_ds_auditcntrl().audit_end_fail("Dag_Name","LANDING",table,status,load_date)        
         
     Audit_START_Task=PythonOperator(
         task_id=table+"_Audit_START_Task",
